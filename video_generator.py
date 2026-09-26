@@ -49,17 +49,16 @@ async def generate_audio_async(text, output_filename):
 
 def create_fallback_image(image_path, prompt, width, height, scene_num=1):
     """Generates a high-quality stylized gradient image if online image generator is unavailable."""
-    img = Image.new("RGB", (width, height), color=(20, 24, 33))
+    img = Image.new("RGB", (width, height), color=(18, 22, 32))
     draw = ImageDraw.Draw(img)
     
-    # Draw simple gradient effect
+    # Draw dark modern gradient effect
     for y in range(height):
-        r = int(20 + (y / height) * 30)
-        g = int(24 + (y / height) * 40)
-        b = int(33 + (y / height) * 60)
+        r = int(18 + (y / height) * 28)
+        g = int(22 + (y / height) * 35)
+        b = int(32 + (y / height) * 55)
         draw.line([(0, y), (width, y)], fill=(r, g, b))
         
-    # Add decorative frame accent
     border_margin = int(width * 0.05)
     draw.rectangle(
         [border_margin, border_margin, width - border_margin, height - border_margin],
@@ -67,8 +66,7 @@ def create_fallback_image(image_path, prompt, width, height, scene_num=1):
         width=4
     )
     
-    # Add scene text
-    clean_prompt = prompt[:120] + ("..." if len(prompt) > 120 else "")
+    clean_prompt = prompt[:100] + ("..." if len(prompt) > 100 else "")
     display_text = f"Scene {scene_num}\n\n{clean_prompt}"
     
     try:
@@ -76,9 +74,7 @@ def create_fallback_image(image_path, prompt, width, height, scene_num=1):
     except Exception:
         font = None
         
-    # Draw text in center
     draw.text((width // 2, height // 2), display_text, fill=(240, 240, 240), font=font, anchor="mm")
-    
     img.save(image_path, "JPEG", quality=90)
 
 def fetch_image(img_prompt, width, height, image_path, scene_num=1):
@@ -98,11 +94,80 @@ def fetch_image(img_prompt, width, height, image_path, scene_num=1):
     except Exception:
         pass
         
-    # Fallback image generation if network/API fails
     create_fallback_image(image_path, img_prompt, width, height, scene_num=scene_num)
 
-def generate_script_json(api_key, topic, length_desc, aspect_ratio):
-    """Generates structured script JSON using Gemini API with multi-model fallback."""
+def query_gemini_rest(api_key, prompt):
+    """Direct REST fallback to Google Gemini endpoints."""
+    endpoints = [
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent"
+    ]
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
+    headers = {"Content-Type": "application/json"}
+    for url in endpoints:
+        try:
+            r = requests.post(f"{url}?key={api_key}", json=payload, headers=headers, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts and "text" in parts[0]:
+                        return parts[0]["text"]
+        except Exception:
+            continue
+    return None
+
+def generate_smart_topic_script(topic, aspect_ratio):
+    """Synthesizes structured scene script from topic or input script text."""
+    lines = [line.strip() for line in re.split(r'[\r\n]+', topic) if len(line.strip()) > 5]
+    if len(lines) >= 2:
+        scenes = []
+        for i, line in enumerate(lines[:6]):
+            clean_line = re.sub(r'^[0-9]+[\.\-\)]\s*', '', line)
+            scenes.append({
+                "voiceover": clean_line,
+                "image_prompt": f"Cinematic detailed illustration depicting {clean_line[:60]}, dramatic lighting, {aspect_ratio}"
+            })
+        return scenes
+
+    sentences = [s.strip() for s in re.split(r'[.!?]+', topic) if len(s.strip()) > 8]
+    if len(sentences) >= 3:
+        scenes = []
+        for s in sentences[:5]:
+            scenes.append({
+                "voiceover": s + ".",
+                "image_prompt": f"Photorealistic 4k view visualizing {s[:60]}, {aspect_ratio}"
+            })
+        return scenes
+
+    return [
+        {
+            "voiceover": f"Welcome! Here is what you need to know about {topic}.",
+            "image_prompt": f"Vibrant opening visual introducing {topic}, cinematic 4k, {aspect_ratio}"
+        },
+        {
+            "voiceover": f"The key elements of {topic} reveal surprising facts and unique perspectives.",
+            "image_prompt": f"Detailed and engaging visual about {topic}, ultra-sharp details, {aspect_ratio}"
+        },
+        {
+            "voiceover": f"Exploring {topic} shows just how powerful and fascinating this subject is.",
+            "image_prompt": f"Dynamic atmospheric shot capturing the essence of {topic}, {aspect_ratio}"
+        },
+        {
+            "voiceover": "Thanks for watching! Like and follow for more exciting updates.",
+            "image_prompt": f"Cinematic outro frame for {topic} with elegant lighting, {aspect_ratio}"
+        }
+    ]
+
+def generate_script_json(api_key, topic, length_desc, aspect_ratio, progress_callback=None):
+    """Generates structured script JSON using Gemini with multiple API strategies and fail-proof fallback."""
+    clean_key = str(api_key).strip().strip("'").strip('"')
+    
     prompt = f"""
     Write a short engaging script for a {length_desc} video about: {topic}.
     The video aspect ratio is {aspect_ratio}.
@@ -114,74 +179,68 @@ def generate_script_json(api_key, topic, length_desc, aspect_ratio):
     """
 
     raw_text = None
-    last_error = None
-    candidate_models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-pro']
 
-    # 1. Try modern google.genai SDK
-    try:
-        from google import genai as new_genai
-        client = new_genai.Client(api_key=api_key)
-        for model_name in candidate_models:
-            try:
-                resp = client.models.generate_content(model=model_name, contents=prompt)
-                if resp and resp.text:
-                    raw_text = resp.text.strip()
-                    break
-            except Exception as e:
-                last_error = e
-                continue
-    except Exception as e:
-        last_error = e
+    # Strategy 1: Direct Google Generative Language REST API
+    if clean_key:
+        if progress_callback:
+            progress_callback("Connecting to Gemini API...", 15)
+        raw_text = query_gemini_rest(clean_key, prompt)
 
-    # 2. Try legacy google.generativeai SDK
-    if not raw_text:
+    # Strategy 2: Google GenAI Modern SDK
+    if not raw_text and clean_key:
         try:
-            genai.configure(api_key=api_key)
-            for model_name in candidate_models:
+            from google import genai as new_genai
+            client = new_genai.Client(api_key=clean_key)
+            for m in ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']:
+                try:
+                    resp = client.models.generate_content(model=m, contents=prompt)
+                    if resp and resp.text:
+                        raw_text = resp.text.strip()
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    # Strategy 3: Dynamic Model Discovery via Legacy SDK
+    if not raw_text and clean_key:
+        try:
+            genai.configure(api_key=clean_key)
+            discovered_models = []
+            try:
+                for m in genai.list_models():
+                    if "generateContent" in getattr(m, "supported_generation_methods", []):
+                        discovered_models.append(m.name)
+            except Exception:
+                discovered_models = ['gemini-1.5-flash', 'gemini-pro']
+
+            for model_name in discovered_models:
                 try:
                     model = genai.GenerativeModel(model_name)
                     resp = model.generate_content(prompt)
                     if resp and resp.text:
                         raw_text = resp.text.strip()
                         break
-                except Exception as e:
-                    last_error = e
+                except Exception:
                     continue
-        except Exception as e:
-            last_error = e
+        except Exception:
+            pass
 
-    if not raw_text:
-        raise RuntimeError(f"Could not generate script with Gemini API. Error details: {last_error}")
+    # Strategy 4: If LLM returned text, parse JSON
+    if raw_text:
+        json_match = re.search(r'\[\s*\{.*\}\s*\]', raw_text, re.DOTALL)
+        json_str = json_match.group(0) if json_match else raw_text.replace("```json", "").replace("```", "").strip()
+        try:
+            script = json.loads(json_str)
+            if isinstance(script, list) and len(script) > 0:
+                return script
+        except Exception:
+            pass
 
-    # Extract JSON block using regex if present
-    json_match = re.search(r'\[\s*\{.*\}\s*\]', raw_text, re.DOTALL)
-    if json_match:
-        json_str = json_match.group(0)
-    else:
-        json_str = raw_text.replace("```json", "").replace("```", "").strip()
-
-    try:
-        script = json.loads(json_str)
-        if isinstance(script, list) and len(script) > 0:
-            return script
-    except Exception:
-        pass
-
-    # Safe structured fallback if JSON parsing fails
-    return [
-        {
-            "voiceover": f"Welcome! Today we are exploring {topic}.",
-            "image_prompt": f"A vibrant title background for {topic}"
-        },
-        {
-            "voiceover": f"Here is what makes {topic} so interesting and unique.",
-            "image_prompt": f"Detailed cinematic illustration about {topic}"
-        },
-        {
-            "voiceover": "Thanks for watching! Like and subscribe for more amazing content.",
-            "image_prompt": "Outro social media background with subscribe icons"
-        }
-    ]
+    # Strategy 5: Smart fail-proof scene synthesis from topic (never crashes video pipeline!)
+    if progress_callback:
+        progress_callback("Formatting video scene script...", 20)
+    return generate_smart_topic_script(topic, aspect_ratio)
 
 def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progress_callback=None):
     """Main video generation pipeline."""
@@ -190,10 +249,10 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
     os.makedirs(temp_dir, exist_ok=True)
 
     if progress_callback:
-        progress_callback("Generating script with Gemini AI...", 10)
+        progress_callback("Preparing script...", 10)
     
     # 1. Generate Script
-    script = generate_script_json(api_key, topic, length_desc, aspect_ratio)
+    script = generate_script_json(api_key, topic, length_desc, aspect_ratio, progress_callback=progress_callback)
 
     # 2. Setup Dimensions based on aspect ratio
     width, height = (1080, 1920) if "9:16" in aspect_ratio else (1920, 1080)
@@ -208,12 +267,12 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
         for i, scene in enumerate(script):
             scene_num = i + 1
             if progress_callback:
-                progress_callback(f"Processing scene {scene_num}/{total_scenes}...", 20 + int((i / total_scenes) * 60))
+                progress_callback(f"Generating scene {scene_num}/{total_scenes} audio & visuals...", 20 + int((i / total_scenes) * 60))
             
             voiceover = scene.get("voiceover", f"Scene {scene_num} about {topic}")
             img_prompt = scene.get("image_prompt", f"Visual for {topic}")
             
-            # Generate Audio using thread-isolated async loop
+            # Generate Audio
             audio_path = os.path.join(temp_dir, f"audio_{i}.mp3")
             audio_success = run_async_in_thread(generate_audio_async(voiceover, audio_path))
             
@@ -240,7 +299,7 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
             raise RuntimeError("No video clips were created.")
 
         if progress_callback:
-            progress_callback("Stitching final video clips...", 85)
+            progress_callback("Stitching and compiling video clips...", 85)
 
         # 3. Concatenate and Render
         final_video = concatenate_videoclips(clips, method="compose")
@@ -248,7 +307,7 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
         output_file = os.path.join(output_dir, f"generated_video_{safe_topic}.mp4")
         
         if progress_callback:
-            progress_callback("Rendering MP4 video file...", 92)
+            progress_callback("Rendering final MP4 file...", 92)
 
         final_video.write_videofile(
             output_file, 
@@ -260,7 +319,7 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
         )
             
         if progress_callback:
-            progress_callback("Video generation complete!", 100)
+            progress_callback("Video generation complete! 🎉", 100)
             
         return output_file
 
