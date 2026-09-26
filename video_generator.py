@@ -423,3 +423,43 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
                 a.close()
             except Exception:
                 pass
+
+def generate_standalone_image(prompt, aspect_ratio="1:1", style="Photorealistic", output_dir="outputs"):
+    """Generates a standalone ultra high-quality AI image using Flux."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Map aspect ratio to pixel dimensions
+    dimensions = {
+        "1:1": (1024, 1024),
+        "16:9": (1280, 720),
+        "9:16": (720, 1280),
+        "4:3": (1024, 768),
+        "3:4": (768, 1024)
+    }
+    width, height = (1024, 1024)
+    for k, v in dimensions.items():
+        if k in aspect_ratio:
+            width, height = v
+            break
+            
+    style_modifiers = {
+        "Photorealistic": "hyperrealistic 8k photograph, highly detailed, natural lighting, 35mm film",
+        "Cinematic Movie Shot": "cinematic film still, award-winning cinematography, dramatic volumetric lighting, anamorphic lens, 8k",
+        "Anime / Studio Ghibli": "stunning anime aesthetic, Makoto Shinkai style, Studio Ghibli, vibrant vivid colors, masterpiece",
+        "3D Digital Art": "3D render, Unreal Engine 5, Octane render, raytracing, Pixar character style, highly detailed",
+        "Cyberpunk Neon": "cyberpunk style, glowing neon lights, futuristic sci-fi aesthetic, reflections, dark moody atmosphere",
+        "Fantasy Concept Art": "epic fantasy concept art, magical atmosphere, ethereal lighting, trending on Artstation",
+        "Oil Painting": "classical oil painting on canvas, visible brush strokes, rich oil colors, masterpiece"
+    }
+    modifier = style_modifiers.get(style, "hyperrealistic 8k photograph, cinematic lighting")
+    
+    clean_prompt = prompt.strip()
+    full_prompt = f"{clean_prompt}, {modifier}, masterpiece, highest quality"
+    
+    safe_topic = "".join([c if c.isalnum() else "_" for c in clean_prompt])[:15]
+    timestamp = int(time.time())
+    output_path = os.path.join(output_dir, f"ai_image_{safe_topic}_{timestamp}.jpg")
+    
+    fetch_image(full_prompt, width, height, output_path, scene_num=timestamp % 100)
+    return output_path
+
