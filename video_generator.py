@@ -8,6 +8,12 @@ import requests
 import asyncio
 import threading
 from PIL import Image, ImageDraw, ImageFont
+import PIL.Image
+
+# Ensure compatibility between MoviePy and newer Pillow versions
+if not hasattr(PIL.Image, 'ANTIALIAS'):
+    PIL.Image.ANTIALIAS = getattr(PIL.Image, 'Resampling', PIL.Image).LANCZOS
+
 import google.generativeai as genai
 import edge_tts
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips, AudioClip
@@ -49,11 +55,10 @@ async def generate_audio_async(text, output_filename):
     return False
 
 def create_artistic_backdrop(image_path, width, height, scene_num=1):
-    """Generates an aesthetic ambient gradient backdrop (never writes raw prompt text)."""
+    """Generates an aesthetic ambient gradient backdrop."""
     img = Image.new("RGB", (width, height), color=(15, 20, 30))
     draw = ImageDraw.Draw(img)
     
-    # Modern dark tech / cinematic gradient
     for y in range(height):
         ratio = y / height
         r = int(12 + ratio * 28 + (scene_num * 5) % 30)
@@ -61,25 +66,22 @@ def create_artistic_backdrop(image_path, width, height, scene_num=1):
         b = int(32 + ratio * 65 + (scene_num * 12) % 40)
         draw.line([(0, y), (width, y)], fill=(r, g, b))
         
-    # Add ambient glow ring in the center
     cx, cy = width // 2, height // 2
     glow_r = int(min(width, height) * 0.35)
     draw.ellipse([cx - glow_r, cy - glow_r, cx + glow_r, cy + glow_r], outline=(255, 75, 75), width=3)
-    
     img.save(image_path, "JPEG", quality=90)
 
 def overlay_subtitles(image_path, voiceover_text, width, height):
-    """Overlays social-media style subtitles onto the image."""
+    """Overlays TikTok / YouTube Shorts style viral subtitles."""
     try:
         img = Image.open(image_path).convert("RGBA")
         
-        # Word wrap text for readability
         words = voiceover_text.split()
         lines = []
         cur_line = []
         for w in words:
             cur_line.append(w)
-            if len(" ".join(cur_line)) > 26:
+            if len(" ".join(cur_line)) > 24:
                 lines.append(" ".join(cur_line))
                 cur_line = []
         if cur_line:
@@ -87,72 +89,90 @@ def overlay_subtitles(image_path, voiceover_text, width, height):
             
         subtitle_text = "\n".join(lines[:3])
         
+        font_size = max(int(height * 0.036), 24)
         try:
-            font_size = max(int(height * 0.032), 22)
-            font = ImageFont.truetype("arial.ttf", size=font_size)
+            font = ImageFont.truetype("arialbd.ttf", size=font_size)
         except Exception:
-            font = ImageFont.load_default()
-            
+            try:
+                font = ImageFont.truetype("arial.ttf", size=font_size)
+            except Exception:
+                font = ImageFont.load_default()
+                
         draw = ImageDraw.Draw(img)
-        margin_y = int(height * 0.82)
+        margin_y = int(height * 0.80)
         
-        # Measure text box
         bbox = draw.multiline_textbbox((width // 2, margin_y), subtitle_text, font=font, anchor="mm", align="center")
-        pad = 18
-        bg_box = [bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad]
+        pad_x, pad_y = 22, 14
+        bg_box = [bbox[0] - pad_x, bbox[1] - pad_y, bbox[2] + pad_x, bbox[3] + pad_y]
         
-        # Translucent dark pill overlay
+        # Glassmorphic rounded pill with subtle golden border
         overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         overlay_draw = ImageDraw.Draw(overlay)
-        overlay_draw.rounded_rectangle(bg_box, radius=14, fill=(0, 0, 0, 200))
+        overlay_draw.rounded_rectangle(bg_box, radius=16, fill=(0, 0, 0, 210), outline=(255, 215, 0, 190), width=2)
         
         combined = Image.alpha_composite(img, overlay).convert("RGB")
         
-        # Render crisp white text
+        # Render crisp white text with subtle drop shadow
         final_draw = ImageDraw.Draw(combined)
+        final_draw.multiline_text((width // 2 + 2, margin_y + 2), subtitle_text, fill=(0, 0, 0), font=font, anchor="mm", align="center")
         final_draw.multiline_text((width // 2, margin_y), subtitle_text, fill=(255, 255, 255), font=font, anchor="mm", align="center")
         
-        combined.save(image_path, "JPEG", quality=92)
+        combined.save(image_path, "JPEG", quality=95)
     except Exception:
         pass
 
 def fetch_image(img_prompt, width, height, image_path, scene_num=1):
-    """Downloads real AI generated visuals based on visual keywords."""
-    # 1. Distill prompt to clean visual subject keywords (prevents API timeouts)
-    clean_words = re.sub(r'[^a-zA-Z0-9\s]', ' ', img_prompt).split()
+    """Generates ultra high-quality cinematic visuals using Flux state-of-the-art model."""
+    clean_words = re.sub(r'[^a-zA-Z0-9\s,]', ' ', img_prompt).split()
     fillers = {"a", "an", "the", "in", "of", "and", "or", "for", "with", "detailed", 
                "orientation", "aspect", "ratio", "image", "prompt", "visual", "fits", 
-               "scene", "depicting", "illustration", "photorealistic", "cinematic", "showing"}
+               "scene", "depicting", "illustration", "showing", "representing"}
     filtered = [w for w in clean_words if w.lower() not in fillers]
-    concise_prompt = " ".join(filtered[:10]) if filtered else "dynamic cinematic landscape"
+    subject = " ".join(filtered[:18]) if filtered else "cinematic atmospheric vista"
+    
+    # State-of-the-art photorealistic prompt engineering
+    boosted_prompt = f"masterpiece, 8k award winning cinematic photograph, {subject}, hyperrealistic, dramatic atmospheric lighting, photorealistic, intricate textures, shallow depth of field, 35mm film grain, octane render"
+    safe_prompt = urllib.parse.quote(boosted_prompt)
+    seed = int(time.time() * 1000) % 999999 + scene_num * 149
     
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    safe_prompt = urllib.parse.quote(f"cinematic photorealistic {concise_prompt}")
-    seed = int(time.time() * 1000) % 99999 + scene_num * 100
     
-    # 2. Try Pollinations AI (free AI image generator)
-    pollinations_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&nologo=true&seed={seed}"
+    # 1. State-of-the-art Flux model with enhance=true (matches Midjourney / commercial AI tools)
+    pollinations_flux_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&model=flux&enhance=true&nologo=true&seed={seed}"
     try:
-        res = requests.get(pollinations_url, headers=headers, timeout=25)
+        res = requests.get(pollinations_flux_url, headers=headers, timeout=28)
         if res.status_code == 200 and len(res.content) > 3000:
             img = Image.open(io.BytesIO(res.content)).convert("RGB")
-            img.save(image_path, "JPEG", quality=92)
+            img = img.resize((width, height), Image.Resampling.LANCZOS)
+            img.save(image_path, "JPEG", quality=95)
             return
     except Exception:
         pass
 
-    # 3. Try high-definition photography fallback (real photos, never text)
+    # 2. Flux Realism Model
+    pollinations_realism_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&model=flux-realism&nologo=true&seed={seed}"
+    try:
+        res = requests.get(pollinations_realism_url, headers=headers, timeout=25)
+        if res.status_code == 200 and len(res.content) > 3000:
+            img = Image.open(io.BytesIO(res.content)).convert("RGB")
+            img = img.resize((width, height), Image.Resampling.LANCZOS)
+            img.save(image_path, "JPEG", quality=95)
+            return
+    except Exception:
+        pass
+
+    # 3. High-definition curated photography fallback (real photos, never text)
     try:
         picsum_url = f"https://picsum.photos/{width}/{height}?random={seed}"
         res = requests.get(picsum_url, headers=headers, timeout=12)
         if res.status_code == 200 and len(res.content) > 3000:
             img = Image.open(io.BytesIO(res.content)).convert("RGB")
-            img.save(image_path, "JPEG", quality=92)
+            img = img.resize((width, height), Image.Resampling.LANCZOS)
+            img.save(image_path, "JPEG", quality=95)
             return
     except Exception:
         pass
 
-    # 4. Artistic graphic backdrop if offline
     create_artistic_backdrop(image_path, width, height, scene_num=scene_num)
 
 def query_gemini_rest(api_key, prompt):
@@ -183,7 +203,6 @@ def query_gemini_rest(api_key, prompt):
 
 def generate_smart_topic_script(topic, aspect_ratio):
     """Synthesizes structured scene script directly from the user's input."""
-    # Check if the user pasted their own custom script lines
     lines = [line.strip() for line in re.split(r'[\r\n]+', topic) if len(line.strip()) > 5]
     if len(lines) >= 2:
         scenes = []
@@ -303,7 +322,7 @@ def generate_script_json(api_key, topic, length_desc, aspect_ratio, progress_cal
     return generate_smart_topic_script(topic, aspect_ratio)
 
 def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progress_callback=None):
-    """Main video generation pipeline."""
+    """Main video generation pipeline with Flux photorealistic visuals and dynamic Ken Burns motion."""
     os.makedirs(output_dir, exist_ok=True)
     temp_dir = os.path.join(output_dir, "temp_assets")
     os.makedirs(temp_dir, exist_ok=True)
@@ -314,7 +333,7 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
     # 1. Generate Script
     script = generate_script_json(api_key, topic, length_desc, aspect_ratio, progress_callback=progress_callback)
 
-    # 2. Optimized HD resolutions for fast generation and crisp output
+    # 2. Optimized crisp HD resolutions
     width, height = (720, 1280) if "9:16" in aspect_ratio else (1280, 720)
     if "1:1" in aspect_ratio:
         width, height = (720, 720)
@@ -327,7 +346,7 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
         for i, scene in enumerate(script):
             scene_num = i + 1
             if progress_callback:
-                progress_callback(f"Generating scene {scene_num}/{total_scenes} audio & visuals...", 20 + int((i / total_scenes) * 60))
+                progress_callback(f"Generating scene {scene_num}/{total_scenes} (AI Flux visuals & voiceover)...", 20 + int((i / total_scenes) * 60))
             
             voiceover = scene.get("voiceover", f"Scene {scene_num} about {topic}")
             img_prompt = scene.get("image_prompt", f"Visual for {topic}")
@@ -344,33 +363,40 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
                 
             audio_clips_to_close.append(audio_clip)
 
-            # Generate Real AI Image based on prompt keywords
+            # Generate High-End AI Visual using Flux
             image_path = os.path.join(temp_dir, f"image_{i}.jpg")
             fetch_image(img_prompt, width, height, image_path, scene_num=scene_num)
             
-            # Overlay social media subtitles onto the scene
+            # Overlay modern viral subtitles onto the scene
             overlay_subtitles(image_path, voiceover, width, height)
 
             # Create Image Clip matching audio duration
             clip_duration = max(audio_clip.duration if hasattr(audio_clip, 'duration') and audio_clip.duration else 4.0, 2.0)
-            img_clip = ImageClip(image_path).set_duration(clip_duration)
-            img_clip = img_clip.set_audio(audio_clip)
             
+            # Apply cinematic slow zoom (Ken Burns camera movement)
+            img_clip = ImageClip(image_path).set_duration(clip_duration)
+            try:
+                # Smooth slow zoom in (1.0 -> 1.05x over duration)
+                img_clip = img_clip.resize(lambda t: 1.0 + (0.025 * t))
+            except Exception:
+                pass
+                
+            img_clip = img_clip.set_audio(audio_clip)
             clips.append(img_clip)
 
         if not clips:
             raise RuntimeError("No video clips were created.")
 
         if progress_callback:
-            progress_callback("Stitching and compiling video clips...", 85)
+            progress_callback("Stitching and compiling cinematic video...", 85)
 
-        # 3. Concatenate and Render
+        # 3. Concatenate and Render with composite method
         final_video = concatenate_videoclips(clips, method="compose")
         safe_topic = "".join([c if c.isalnum() else "_" for c in topic])[:15]
         output_file = os.path.join(output_dir, f"generated_video_{safe_topic}.mp4")
         
         if progress_callback:
-            progress_callback("Rendering final MP4 file...", 92)
+            progress_callback("Rendering high-definition MP4 file...", 92)
 
         final_video.write_videofile(
             output_file, 
