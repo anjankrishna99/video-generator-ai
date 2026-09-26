@@ -10,31 +10,7 @@ load_dotenv(ENV_FILE)
 
 st.set_page_config(page_title="AI Video Generator", page_icon="🎥", layout="wide")
 
-# Custom CSS for a clean, modern look
-st.markdown("""
-<style>
-    .stButton>button {
-        background-color: #ff4b4b;
-        color: white;
-        border-radius: 8px;
-        height: 48px;
-        font-weight: bold;
-        transition: all 0.3s ease;
-    }
-    .stButton>button:hover {
-        background-color: #ff3333;
-        box-shadow: 0 4px 12px rgba(255, 75, 75, 0.4);
-    }
-    .apply-btn>button {
-        background-color: #28a745 !important;
-        height: 42px !important;
-    }
-    .apply-btn>button:hover {
-        background-color: #218838 !important;
-        box-shadow: 0 4px 10px rgba(40, 167, 69, 0.4) !important;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.markdown("<style>.stButton>button { background-color: #ff4b4b; color: white; border-radius: 8px; height: 48px; font-weight: bold; transition: all 0.3s ease; } .stButton>button:hover { background-color: #ff3333; box-shadow: 0 4px 12px rgba(255, 75, 75, 0.4); }</style>", unsafe_allow_html=True)
 
 st.title("🎥 Local AI Video Generator")
 st.markdown("Generate short-form videos for social media powered by **Gemini AI** and Free AI Image endpoints.")
