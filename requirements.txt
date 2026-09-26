@@ -1,4 +1,5 @@
 streamlit
+google-genai
 google-generativeai
 moviepy==1.0.3
 edge-tts

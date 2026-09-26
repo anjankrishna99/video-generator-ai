@@ -20,9 +20,6 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
         progress_callback("Generating script with Gemini...", 10)
     
     # 1. Generate Script
-    genai.configure(api_key=api_key)
-    # Use gemini-1.5-flash which is fast, structured, and free tier compatible
-    model = genai.GenerativeModel('gemini-1.5-flash')
     prompt = f"""
     Write a short engaging script for a {length_desc} video about: {topic}.
     The video aspect ratio is {aspect_ratio}.
@@ -32,18 +29,58 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
     - "voiceover": the text to be spoken in the scene.
     - "image_prompt": a detailed description of the visual scene for an AI image generator. Ensure it fits a {aspect_ratio} orientation.
     """
-    
-    response = model.generate_content(prompt)
-    raw_text = response.text.strip()
+
+    raw_text = None
+    last_error = None
+    candidate_models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+
+    # Try modern google.genai SDK first
+    try:
+        from google import genai as new_genai
+        client = new_genai.Client(api_key=api_key)
+        for model_name in candidate_models:
+            try:
+                resp = client.models.generate_content(model=model_name, contents=prompt)
+                if resp and resp.text:
+                    raw_text = resp.text.strip()
+                    break
+            except Exception as e:
+                last_error = e
+                continue
+    except Exception as e:
+        last_error = e
+
+    # Fallback to google.generativeai SDK if modern SDK didn't return text
+    if not raw_text:
+        try:
+            genai.configure(api_key=api_key)
+            for model_name in candidate_models:
+                try:
+                    model = genai.GenerativeModel(model_name)
+                    resp = model.generate_content(prompt)
+                    if resp and resp.text:
+                        raw_text = resp.text.strip()
+                        break
+                except Exception as e:
+                    last_error = e
+                    continue
+        except Exception as e:
+            last_error = e
+
+    if not raw_text:
+        raise RuntimeError(f"Could not generate script with Gemini API. Error details: {last_error}")
+
     if raw_text.startswith("```json"):
         raw_text = raw_text[7:]
+    if raw_text.startswith("```"):
+        raw_text = raw_text[3:]
     if raw_text.endswith("```"):
         raw_text = raw_text[:-3]
-    
+
     try:
         script = json.loads(raw_text.strip())
     except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse Gemini response as JSON: {response.text}") from e
+        raise ValueError(f"Failed to parse Gemini response as JSON: {raw_text}") from e
 
     # 2. Process Scenes
     clips = []
