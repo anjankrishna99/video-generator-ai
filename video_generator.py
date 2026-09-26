@@ -5,25 +5,34 @@ import io
 import urllib.parse
 import requests
 import asyncio
-import nest_asyncio
+import threading
 from PIL import Image, ImageDraw, ImageFont
 import google.generativeai as genai
 import edge_tts
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips, AudioClip
 
-# Apply nest_asyncio so asyncio works seamlessly inside Streamlit
-nest_asyncio.apply()
+def run_async_in_thread(coro):
+    """Executes a coroutine safely in an isolated thread with its own event loop."""
+    res_container = []
+    err_container = []
 
-def run_async(coro):
-    """Helper to run async coroutines safely in any environment."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            return loop.run_until_complete(coro)
-        else:
-            return loop.run_until_complete(coro)
-    except RuntimeError:
-        return asyncio.run(coro)
+    def target():
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            res = loop.run_until_complete(coro)
+            res_container.append(res)
+            loop.close()
+        except Exception as e:
+            err_container.append(e)
+
+    thread = threading.Thread(target=target)
+    thread.start()
+    thread.join(timeout=35)
+    
+    if err_container:
+        return None
+    return res_container[0] if res_container else None
 
 async def generate_audio_async(text, output_filename):
     """Generate TTS audio using edge-tts with fallbacks."""
@@ -81,7 +90,6 @@ def fetch_image(img_prompt, width, height, image_path, scene_num=1):
     try:
         res = requests.get(image_url, headers=headers, timeout=20)
         if res.status_code == 200 and len(res.content) > 1000:
-            # Verify valid image bytes
             test_img = Image.open(io.BytesIO(res.content))
             test_img.verify()
             with open(image_path, "wb") as f:
@@ -205,14 +213,13 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
             voiceover = scene.get("voiceover", f"Scene {scene_num} about {topic}")
             img_prompt = scene.get("image_prompt", f"Visual for {topic}")
             
-            # Generate Audio
+            # Generate Audio using thread-isolated async loop
             audio_path = os.path.join(temp_dir, f"audio_{i}.mp3")
-            audio_success = run_async(generate_audio_async(voiceover, audio_path))
+            audio_success = run_async_in_thread(generate_audio_async(voiceover, audio_path))
             
             if audio_success and os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
                 audio_clip = AudioFileClip(audio_path)
             else:
-                # Create silent 4-second audio clip as fallback
                 duration = 4.0
                 audio_clip = AudioClip(lambda t: 0, duration=duration)
                 
@@ -258,7 +265,6 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
         return output_file
 
     finally:
-        # Clean up clips to free file locks and memory
         for c in clips:
             try:
                 c.close()
