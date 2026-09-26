@@ -2,6 +2,9 @@ import streamlit as st
 import os
 import traceback
 from dotenv import load_dotenv, set_key
+import video_generator
+import importlib
+importlib.reload(video_generator)
 from video_generator import generate_video
 
 # Load environment variables from .env file if present
