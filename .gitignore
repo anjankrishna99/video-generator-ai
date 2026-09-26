@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Temp files and generated media
+*.mp4
+*.mp3
+*.wav
+*.png
+*.jpg
+*.jpeg
+temp/
+outputs/
+downloads/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS metadata
+.DS_Store
+Thumbs.db
