@@ -21,8 +21,8 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
     
     # 1. Generate Script
     genai.configure(api_key=api_key)
-    # Use the highly stable gemini-pro (1.0) model which is universally available on the free tier
-    model = genai.GenerativeModel('gemini-pro')
+    # Use gemini-1.5-flash which is fast, structured, and free tier compatible
+    model = genai.GenerativeModel('gemini-1.5-flash')
     prompt = f"""
     Write a short engaging script for a {length_desc} video about: {topic}.
     The video aspect ratio is {aspect_ratio}.
