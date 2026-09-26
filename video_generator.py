@@ -2,6 +2,7 @@ import os
 import json
 import re
 import io
+import time
 import urllib.parse
 import requests
 import asyncio
@@ -35,7 +36,7 @@ def run_async_in_thread(coro):
     return res_container[0] if res_container else None
 
 async def generate_audio_async(text, output_filename):
-    """Generate TTS audio using edge-tts with fallbacks."""
+    """Generate TTS audio using edge-tts with voice fallbacks."""
     voices = ["en-US-ChristopherNeural", "en-US-GuyNeural", "en-US-AriaNeural"]
     for voice in voices:
         try:
@@ -47,54 +48,112 @@ async def generate_audio_async(text, output_filename):
             continue
     return False
 
-def create_fallback_image(image_path, prompt, width, height, scene_num=1):
-    """Generates a high-quality stylized gradient image if online image generator is unavailable."""
-    img = Image.new("RGB", (width, height), color=(18, 22, 32))
+def create_artistic_backdrop(image_path, width, height, scene_num=1):
+    """Generates an aesthetic ambient gradient backdrop (never writes raw prompt text)."""
+    img = Image.new("RGB", (width, height), color=(15, 20, 30))
     draw = ImageDraw.Draw(img)
     
-    # Draw dark modern gradient effect
+    # Modern dark tech / cinematic gradient
     for y in range(height):
-        r = int(18 + (y / height) * 28)
-        g = int(22 + (y / height) * 35)
-        b = int(32 + (y / height) * 55)
+        ratio = y / height
+        r = int(12 + ratio * 28 + (scene_num * 5) % 30)
+        g = int(18 + ratio * 35 + (scene_num * 8) % 30)
+        b = int(32 + ratio * 65 + (scene_num * 12) % 40)
         draw.line([(0, y), (width, y)], fill=(r, g, b))
         
-    border_margin = int(width * 0.05)
-    draw.rectangle(
-        [border_margin, border_margin, width - border_margin, height - border_margin],
-        outline=(255, 75, 75),
-        width=4
-    )
+    # Add ambient glow ring in the center
+    cx, cy = width // 2, height // 2
+    glow_r = int(min(width, height) * 0.35)
+    draw.ellipse([cx - glow_r, cy - glow_r, cx + glow_r, cy + glow_r], outline=(255, 75, 75), width=3)
     
-    clean_prompt = prompt[:100] + ("..." if len(prompt) > 100 else "")
-    display_text = f"Scene {scene_num}\n\n{clean_prompt}"
-    
-    try:
-        font = ImageFont.load_default()
-    except Exception:
-        font = None
-        
-    draw.text((width // 2, height // 2), display_text, fill=(240, 240, 240), font=font, anchor="mm")
     img.save(image_path, "JPEG", quality=90)
 
+def overlay_subtitles(image_path, voiceover_text, width, height):
+    """Overlays social-media style subtitles onto the image."""
+    try:
+        img = Image.open(image_path).convert("RGBA")
+        
+        # Word wrap text for readability
+        words = voiceover_text.split()
+        lines = []
+        cur_line = []
+        for w in words:
+            cur_line.append(w)
+            if len(" ".join(cur_line)) > 26:
+                lines.append(" ".join(cur_line))
+                cur_line = []
+        if cur_line:
+            lines.append(" ".join(cur_line))
+            
+        subtitle_text = "\n".join(lines[:3])
+        
+        try:
+            font_size = max(int(height * 0.032), 22)
+            font = ImageFont.truetype("arial.ttf", size=font_size)
+        except Exception:
+            font = ImageFont.load_default()
+            
+        draw = ImageDraw.Draw(img)
+        margin_y = int(height * 0.82)
+        
+        # Measure text box
+        bbox = draw.multiline_textbbox((width // 2, margin_y), subtitle_text, font=font, anchor="mm", align="center")
+        pad = 18
+        bg_box = [bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad]
+        
+        # Translucent dark pill overlay
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        overlay_draw.rounded_rectangle(bg_box, radius=14, fill=(0, 0, 0, 200))
+        
+        combined = Image.alpha_composite(img, overlay).convert("RGB")
+        
+        # Render crisp white text
+        final_draw = ImageDraw.Draw(combined)
+        final_draw.multiline_text((width // 2, margin_y), subtitle_text, fill=(255, 255, 255), font=font, anchor="mm", align="center")
+        
+        combined.save(image_path, "JPEG", quality=92)
+    except Exception:
+        pass
+
 def fetch_image(img_prompt, width, height, image_path, scene_num=1):
-    """Downloads image from free AI image API with fallback to local graphic generation."""
-    safe_prompt = urllib.parse.quote(img_prompt)
-    image_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&nologo=true"
+    """Downloads real AI generated visuals based on visual keywords."""
+    # 1. Distill prompt to clean visual subject keywords (prevents API timeouts)
+    clean_words = re.sub(r'[^a-zA-Z0-9\s]', ' ', img_prompt).split()
+    fillers = {"a", "an", "the", "in", "of", "and", "or", "for", "with", "detailed", 
+               "orientation", "aspect", "ratio", "image", "prompt", "visual", "fits", 
+               "scene", "depicting", "illustration", "photorealistic", "cinematic", "showing"}
+    filtered = [w for w in clean_words if w.lower() not in fillers]
+    concise_prompt = " ".join(filtered[:10]) if filtered else "dynamic cinematic landscape"
     
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    safe_prompt = urllib.parse.quote(f"cinematic photorealistic {concise_prompt}")
+    seed = int(time.time() * 1000) % 99999 + scene_num * 100
+    
+    # 2. Try Pollinations AI (free AI image generator)
+    pollinations_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&nologo=true&seed={seed}"
     try:
-        res = requests.get(image_url, headers=headers, timeout=20)
-        if res.status_code == 200 and len(res.content) > 1000:
-            test_img = Image.open(io.BytesIO(res.content))
-            test_img.verify()
-            with open(image_path, "wb") as f:
-                f.write(res.content)
+        res = requests.get(pollinations_url, headers=headers, timeout=25)
+        if res.status_code == 200 and len(res.content) > 3000:
+            img = Image.open(io.BytesIO(res.content)).convert("RGB")
+            img.save(image_path, "JPEG", quality=92)
             return
     except Exception:
         pass
-        
-    create_fallback_image(image_path, img_prompt, width, height, scene_num=scene_num)
+
+    # 3. Try high-definition photography fallback (real photos, never text)
+    try:
+        picsum_url = f"https://picsum.photos/{width}/{height}?random={seed}"
+        res = requests.get(picsum_url, headers=headers, timeout=12)
+        if res.status_code == 200 and len(res.content) > 3000:
+            img = Image.open(io.BytesIO(res.content)).convert("RGB")
+            img.save(image_path, "JPEG", quality=92)
+            return
+    except Exception:
+        pass
+
+    # 4. Artistic graphic backdrop if offline
+    create_artistic_backdrop(image_path, width, height, scene_num=scene_num)
 
 def query_gemini_rest(api_key, prompt):
     """Direct REST fallback to Google Gemini endpoints."""
@@ -123,7 +182,8 @@ def query_gemini_rest(api_key, prompt):
     return None
 
 def generate_smart_topic_script(topic, aspect_ratio):
-    """Synthesizes structured scene script from topic or input script text."""
+    """Synthesizes structured scene script directly from the user's input."""
+    # Check if the user pasted their own custom script lines
     lines = [line.strip() for line in re.split(r'[\r\n]+', topic) if len(line.strip()) > 5]
     if len(lines) >= 2:
         scenes = []
@@ -131,7 +191,7 @@ def generate_smart_topic_script(topic, aspect_ratio):
             clean_line = re.sub(r'^[0-9]+[\.\-\)]\s*', '', line)
             scenes.append({
                 "voiceover": clean_line,
-                "image_prompt": f"Cinematic detailed illustration depicting {clean_line[:60]}, dramatic lighting, {aspect_ratio}"
+                "image_prompt": f"Dramatic visual depicting {clean_line[:50]}, cinematic lighting, {aspect_ratio}"
             })
         return scenes
 
@@ -141,7 +201,7 @@ def generate_smart_topic_script(topic, aspect_ratio):
         for s in sentences[:5]:
             scenes.append({
                 "voiceover": s + ".",
-                "image_prompt": f"Photorealistic 4k view visualizing {s[:60]}, {aspect_ratio}"
+                "image_prompt": f"Detailed photorealistic view of {s[:50]}, {aspect_ratio}"
             })
         return scenes
 
@@ -237,7 +297,7 @@ def generate_script_json(api_key, topic, length_desc, aspect_ratio, progress_cal
         except Exception:
             pass
 
-    # Strategy 5: Smart fail-proof scene synthesis from topic (never crashes video pipeline!)
+    # Strategy 5: Smart fail-proof scene synthesis from topic
     if progress_callback:
         progress_callback("Formatting video scene script...", 20)
     return generate_smart_topic_script(topic, aspect_ratio)
@@ -254,10 +314,10 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
     # 1. Generate Script
     script = generate_script_json(api_key, topic, length_desc, aspect_ratio, progress_callback=progress_callback)
 
-    # 2. Setup Dimensions based on aspect ratio
-    width, height = (1080, 1920) if "9:16" in aspect_ratio else (1920, 1080)
+    # 2. Optimized HD resolutions for fast generation and crisp output
+    width, height = (720, 1280) if "9:16" in aspect_ratio else (1280, 720)
     if "1:1" in aspect_ratio:
-        width, height = (1080, 1080)
+        width, height = (720, 720)
 
     clips = []
     audio_clips_to_close = []
@@ -284,9 +344,12 @@ def generate_video(api_key, topic, length_desc, aspect_ratio, output_dir, progre
                 
             audio_clips_to_close.append(audio_clip)
 
-            # Generate Image
+            # Generate Real AI Image based on prompt keywords
             image_path = os.path.join(temp_dir, f"image_{i}.jpg")
             fetch_image(img_prompt, width, height, image_path, scene_num=scene_num)
+            
+            # Overlay social media subtitles onto the scene
+            overlay_subtitles(image_path, voiceover, width, height)
 
             # Create Image Clip matching audio duration
             clip_duration = max(audio_clip.duration if hasattr(audio_clip, 'duration') and audio_clip.duration else 4.0, 2.0)
